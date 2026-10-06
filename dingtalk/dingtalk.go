@@ -70,7 +70,7 @@ func (c *dingtalkClient) call(ctx context.Context, method, path string, query ur
 	if err := c.ensureToken(ctx); err != nil {
 		return err
 	}
-	err := c.do(ctx, method, path, query, body, out)
+	err := c.do(ctx, method, path, query, body, out, c.token)
 	if err == nil {
 		return nil
 	}
@@ -79,7 +79,7 @@ func (c *dingtalkClient) call(ctx context.Context, method, path string, query ur
 		if err2 := c.ensureToken(ctx); err2 != nil {
 			return err2
 		}
-		return c.do(ctx, method, path, query, body, out)
+		return c.do(ctx, method, path, query, body, out, c.token)
 	}
 	return err
 }
@@ -94,8 +94,10 @@ func isTokenStale(err error) bool {
 		bytes.Contains([]byte(msg), []byte("errcode=88"))
 }
 
-// do 发请求（Bearer token；v1.0 语义：非 200 → error）。
-func (c *dingtalkClient) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
+// do 发请求（v1.0 语义：非 200 → error）。token 参数化 = 操作面（actions_exec.go）
+// 可复用：同步面传应用 accessToken，操作面 OnBehalf 时传发起人个人令牌（同一
+// x-acs-dingtalk-access-token 头——真租户校准点挂仓 issue）。
+func (c *dingtalkClient) do(ctx context.Context, method, path string, query url.Values, body, out any, token string) error {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -112,7 +114,7 @@ func (c *dingtalkClient) do(ctx context.Context, method, path string, query url.
 	if err != nil {
 		return err
 	}
-	req.Header.Set("x-acs-dingtalk-access-token", c.token)
+	req.Header.Set("x-acs-dingtalk-access-token", token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -159,7 +161,7 @@ func (c *dingtalkClient) ensureToken(ctx context.Context) error {
 	saved := c.token
 	c.token = ""
 	err := c.do(ctx, http.MethodPost, dingtalkTokenPath, nil,
-		map[string]string{"appKey": c.cfg.AppKey, "appSecret": c.cfg.AppSecret}, &out)
+		map[string]string{"appKey": c.cfg.AppKey, "appSecret": c.cfg.AppSecret}, &out, c.token)
 	if err != nil {
 		c.token = saved
 		return fmt.Errorf("dingtalk token: %w", err)

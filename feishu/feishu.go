@@ -78,7 +78,7 @@ func (c *feishuClient) call(ctx context.Context, method, path string, query url.
 	if err := c.ensureToken(ctx); err != nil {
 		return err
 	}
-	resp, err := c.do(ctx, method, path, query, body, out)
+	resp, err := c.do(ctx, method, path, query, body, out, c.token)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func (c *feishuClient) call(ctx context.Context, method, path string, query url.
 		if err := c.ensureToken(ctx); err != nil {
 			return err
 		}
-		resp, err = c.do(ctx, method, path, query, body, out)
+		resp, err = c.do(ctx, method, path, query, body, out, c.token)
 		if err != nil {
 			return err
 		}
@@ -99,7 +99,9 @@ func (c *feishuClient) call(ctx context.Context, method, path string, query url.
 }
 
 // do 发请求 + 解 beeo 信封（transport 失败 → 原始错误；信封 Data 解进 out）。
-func (c *feishuClient) do(ctx context.Context, method, path string, query url.Values, body any, out any) (*beeoEnvelope, error) {
+// bearer 参数化 = 操作面（actions_exec.go）可复用：同步面传应用 token，操作
+// 面 OnBehalf 时传发起人用户令牌。
+func (c *feishuClient) do(ctx context.Context, method, path string, query url.Values, body any, out any, bearer string) (*beeoEnvelope, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -116,7 +118,7 @@ func (c *feishuClient) do(ctx context.Context, method, path string, query url.Va
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+bearer)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	}
@@ -153,11 +155,11 @@ func (c *feishuClient) ensureToken(ctx context.Context) error {
 		TenantAccessToken string `json:"tenant_access_token"`
 		Expire            int    `json:"expire"` // 秒
 	}
-	// token 端点本身不带 Bearer（自取），走 do 前清 token 避免递归 ensureToken
+	// token 端点本身不带 Bearer（自取）——此刻 c.token 已清空，同形传入
 	saved := c.token
 	c.token = ""
 	resp, err := c.do(ctx, http.MethodPost, feishuTokenPath, nil,
-		map[string]string{"app_id": c.cfg.AppID, "app_secret": c.cfg.AppSecret}, &out)
+		map[string]string{"app_id": c.cfg.AppID, "app_secret": c.cfg.AppSecret}, &out, c.token)
 	if err != nil {
 		c.token = saved
 		return fmt.Errorf("feishu token: %w", err)

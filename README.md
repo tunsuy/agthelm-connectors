@@ -44,8 +44,9 @@ type ActionConnector interface {
 ```
 
 - 能力清单是 adapter 的**声明面**：五键自描述（system/systemLabel/action/actionLabel/write，与 agthelm 模板动作段载荷同构），宿主启动期与自己的操作目录逐行对偶——键不齐 = 构建期/测试期失败。
-- `ExecRequest` 携带操作键 + 参数 + **凭据句柄**（`OnBehalf` = 发起人平台令牌的不透明字符串，空 = 应用凭据形态——用哪种身份归宿主部署期配置，契约不仲裁）+ 宿主幂等键。
-- 失败统一 error 出口：权限不足/参数缺失/平台故障各自可辨，透传不吞；回执 `Ref` = 平台侧单据号供审计对账。
+- `ExecRequest` 携带操作键 + 参数 + **凭据句柄**（`OnBehalf` = 发起人平台令牌的不透明字符串，空 = 应用凭据形态——用哪种身份归宿主部署期配置，契约不仲裁）+ 宿主幂等键（平台端点无幂等参数，同键去重归宿主，adapter 不消费）。
+- 失败统一 error 出口（v0.3 起为 `*contract.ExecError`：`Kind` ∈ unauthorized/forbidden/invalid_params/not_found/platform + 平台码原文 + `Retryable` 幂等重试判定），透传不吞；回执 `Ref` = 平台侧单据号供审计对账。
+- Exec 实现已落地打样：`feishu.NewFeishuAction` / `dingtalk.NewDingTalkAction`（审批创建/查询 + 钉钉待办；`OnBehalf` 非空 = 发起人令牌直发不缓存不刷新，空 = 应用 token 带失效重试）。端点形状按公开文档钉死，真租户校准点挂仓 issue。
 
 ## 使用
 
@@ -64,6 +65,22 @@ var c contract.Connector = conn
 docs, err := c.LoadDocs(ctx)
 ```
 
+操作面（v0.3）：
+
+```go
+act, err := feishu.NewFeishuAction(feishu.FeishuActionConfig{
+    BaseURL: "https://open.feishu.cn",
+    AppID:   os.Getenv("APP_ID"), AppSecret: os.Getenv("APP_SECRET"),
+    ApprovalCodes: map[string]string{"补卡": "<租户审批定义 code>"}, // 缺映射 = 类型键原文直用
+})
+rc, err := act.Exec(ctx, contract.ExecRequest{
+    Action:   "submit_approval",
+    Params:   map[string]string{"type": "补卡", "person": "ou-…"},
+    OnBehalf: "<发起人用户令牌；空 = 应用身份>",
+})
+// 失败 = *contract.ExecError（Kind 可辨：unauthorized/forbidden/invalid_params/platform…）
+```
+
 ## 新增一个 adapter（最小路径）
 
 1. 读 `contract/connector.go`（五方法 + 纪律）和 `contract/types.go`（四 DTO）；
@@ -71,7 +88,7 @@ docs, err := c.LoadDocs(ctx)
    - 端点字符串全部收在本包 const 块（单点可校准）；
    - token 缓存 + 失效刷新重试一次的骨架可直接复用两 adapter 的 `call/do/ensureToken` 形状；
    - 配置结构带 `BaseURL` 注入口（fake 剑本消费同一实现——见下）；
-3. 可选操作面：`<platform>/actions.go` 声明 `ActionCapabilities`（键/标签/写分级 + 参数——宿主操作目录对偶源），Exec 实现随后补；
+3. 可选操作面：`<platform>/actions.go` 声明 `ActionCapabilities`（键/标签/写分级 + 参数——宿主操作目录对偶源），Exec 实现随后补（参考 `feishu/actions_exec.go`：能力查行 → `contract.ValidateParams` 必填校验 → 分发执行 → 失败语义归类 `*contract.ExecError`）；
 4. **必须带剑本测试**：httptest fake 复刻平台端点信封形状（参考 `feishu/feishu_test.go`）——`t.Errorf("未知端点")` 分支保证协议漂移在 CI 爆出；
 5. 本地 `go build ./... && go vet ./... && go test ./...` 全绿后提 PR。
 
