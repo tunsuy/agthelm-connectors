@@ -12,9 +12,9 @@ Apache-2.0 · Go module `github.com/tunsuy/agthelm-connectors`
 
 | 在本仓 | 不在本仓（归宿主私有侧） |
 |---|---|
-| `contract/`：版本化三段契约（`ContractVersion`）+ 中立 DTO | 同步引擎（幂等收敛/水位/runs 报表） |
-| `feishu/`：飞书 adapter（云文档 + 知识库五面） | 落库与事务（pg/存储端口） |
-| `dingtalk/`：钉钉 adapter（v1.0 + topapi 双信封） | 身份/权限/治理语义（主体展开、ACL 收敛） |
+| `contract/`：版本化契约（`ContractVersion`）+ 中立 DTO——同步面（三段式）与操作面（能力清单 + Exec） | 同步引擎（幂等收敛/水位/runs 报表） |
+| `feishu/`：飞书 adapter（同步五面 + 操作能力声明：审批） | 落库与事务（pg/存储端口） |
+| `dingtalk/`：钉钉 adapter（同步五面 + 操作能力声明：审批/待办） | 身份/权限/治理语义（主体展开、ACL 收敛、确认闸） |
 | 剑本测试（httptest fake 钉协议信封形状） | 控制台装配与观测端点 |
 
 **依赖方向铁律：adapter 只依赖 `contract` 包（零宿主 import）。** 宿主通过自己的薄适配层消费本仓（私有 import 公开，永不反向）。
@@ -32,6 +32,20 @@ type Connector interface {
 ```
 
 实现纪律：幂等友好（重放恒等）· 源端命名空间（open_id/source_dept_id，零宿主身份概念）· 失败上抛（重试/水位归宿主）· 端点字符串单点在本包内。
+
+### 操作面（v0.2 增补，additive）
+
+```go
+type ActionConnector interface {
+    System() string                       // 系统键（与宿主操作白名单行对偶）
+    Capabilities() []ActionCapability     // 能力清单：system/action 双键 + 标签 + 写分级 + 参数
+    Exec(ctx, ExecRequest) (ExecReceipt, error) // 真实执行（凭据句柄在请求上，身份语义归宿主）
+}
+```
+
+- 能力清单是 adapter 的**声明面**：五键自描述（system/systemLabel/action/actionLabel/write，与 agthelm 模板动作段载荷同构），宿主启动期与自己的操作目录逐行对偶——键不齐 = 构建期/测试期失败。
+- `ExecRequest` 携带操作键 + 参数 + **凭据句柄**（`OnBehalf` = 发起人平台令牌的不透明字符串，空 = 应用凭据形态——用哪种身份归宿主部署期配置，契约不仲裁）+ 宿主幂等键。
+- 失败统一 error 出口：权限不足/参数缺失/平台故障各自可辨，透传不吞；回执 `Ref` = 平台侧单据号供审计对账。
 
 ## 使用
 
@@ -57,8 +71,9 @@ docs, err := c.LoadDocs(ctx)
    - 端点字符串全部收在本包 const 块（单点可校准）；
    - token 缓存 + 失效刷新重试一次的骨架可直接复用两 adapter 的 `call/do/ensureToken` 形状；
    - 配置结构带 `BaseURL` 注入口（fake 剑本消费同一实现——见下）；
-3. **必须带剑本测试**：httptest fake 复刻平台端点信封形状（参考 `feishu/feishu_test.go`）——`t.Errorf("未知端点")` 分支保证协议漂移在 CI 爆出；
-4. 本地 `go build ./... && go vet ./... && go test ./...` 全绿后提 PR。
+3. 可选操作面：`<platform>/actions.go` 声明 `ActionCapabilities`（键/标签/写分级 + 参数——宿主操作目录对偶源），Exec 实现随后补；
+4. **必须带剑本测试**：httptest fake 复刻平台端点信封形状（参考 `feishu/feishu_test.go`）——`t.Errorf("未知端点")` 分支保证协议漂移在 CI 爆出；
+5. 本地 `go build ./... && go vet ./... && go test ./...` 全绿后提 PR。
 
 贡献模式 phase 1 = in-tree PR（无动态加载/插件机制）。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
